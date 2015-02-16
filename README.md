@@ -1,7 +1,7 @@
 viterbi
 =======
 
-C++ code for finding shared haplotypes between diploid individuals using the Viterbi algorithm. The program is designed to find the longest shared haplotype between a given individual and larger reference panel. 
+C++ code for finding shared haplotypes between individuals under the Li and Stephens Model (2003) using the Viterbi algorithm. The program is designed to find long shared haplotypes between a given individual and larger reference panel. 
 
 Usage
 -----
@@ -17,11 +17,13 @@ Usage is as follows:
   - --chr : Specify the chromosome on which to run the algorithm.
   - --test-indv : Specify the individual for which you want to find the shared haplotypes. (Can be used more than once to specify multiple individuals).
   - --error-rate : Specify the probability of an allele mismatch between shared haplotypes (default: 0.0). 
+  - --recomb : Specify the assumed recombination rate in cM/Mb (default: 1.0 cM/Mb).
+  - --Ne : Specify the effective population size (default: 10000). 
   - --out : Specify prefix of output files. 
 
-+ Output:
-	The output file has the following columns:
- - HAP : The haplotype in the test individual. The haplotype is suffixed with _1 for the first haplotype, and _2 for the second. 
++ Output
+The output file has the following columns:
+ - HAP : The haplotype in the test individual. The haplotype is suffixed with _1 for the individual's first haplotype, and _2 for the second. 
  - COPY : The haplotype being copied in the reference panel.
  - CHR : Chromosome.
  - START : Haplotype start position.
@@ -35,4 +37,4 @@ Usage is as follows:
 Notes
 -----
 
-This program can use a fair amount of resources. For chr22 on 1000 Genomes Phase 3 data, it needs a few Gb of RAM. For chr1, I think it needs ~40Gb. On our big machine, chr22 would run in about 4 hours, whereas chr1 is closer to 24 hours.
+This program can use a fair amount of resources. For chr22 on 1000 Genomes Phase 3 data, it needs a few Gb of RAM. For chr1, it needs ~40Gb. A run on chr22 should take about 4 hours on a 3.4Ghz machine, whereas chr1 will take closer to 24 hours.
