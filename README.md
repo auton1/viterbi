@@ -22,6 +22,7 @@ Usage is as follows:
   - --out : Specify prefix of output files. 
 
 + Output
+
 The output file has the following columns:
  - HAP : The haplotype in the test individual. The haplotype is suffixed with _1 for the individual's first haplotype, and _2 for the second. 
  - COPY : The haplotype being copied in the reference panel.
