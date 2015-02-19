@@ -109,6 +109,8 @@ public:
 	double p_error;
 	int max_threads;
 
+	bool run_viterbi;
+
 	parameters(int argc, char *argv[]);
 	~parameters(){};
 

@@ -82,6 +82,8 @@ parameters::parameters(int argc, char *argv[])
 	time(&start);
 	seed = start;
 	generator.seed(seed);
+
+	run_viterbi = true;
 }
 
 void parameters::read_parameters()
@@ -203,6 +205,7 @@ void parameters::read_parameters()
 		else if (in_str == "--test-indv") { viterbi_indv.insert(get_arg(i+1)); i++; }
 		else if (in_str == "--error") { p_error = atof(get_arg(i+1).c_str()); i++; }
 		else if (in_str == "--maxthreads") { max_threads = atoi(get_arg(i+1).c_str()); i++; }
+		else if (in_str == "--fwdbck") { run_viterbi = false; }
 		else
 			error("Unknown option: " + string(in_str), 0);
 		i++;
@@ -368,6 +371,9 @@ void parameters::print_params()
 
 	LOG.printLOG("\t--seed " + output_log::int2str(seed) + "\n");
 	LOG.printLOG("\t--maxthreads " + output_log::int2str(max_threads) + "\n");
+
+	if (run_viterbi != defaults.run_viterbi)
+		LOG.printLOG("\t--fwdbck\n");
 
 	if (map_filename != defaults.map_filename) LOG.printLOG("\t--map " + map_filename + "\n");
 	if (recomb_rate != defaults.recomb_rate) LOG.printLOG("\t--recomb " + output_log::dbl2str(recomb_rate, 3) + "\n");

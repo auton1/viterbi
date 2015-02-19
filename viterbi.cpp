@@ -68,7 +68,7 @@ void read_genetic_map_at_positions(string &filename, vector<unsigned int> &posit
 	}
 }
 
-void inner_loop(const vector<double> &v, double p_rec, double p_no_rec,
+void inner_loop_viterbi(const vector<double> &v, double p_rec, double p_no_rec,
 		const vector<vector<bool> > &haps, double em_match, double em_mismatch,
 		int i, int start, int end, const vector<int> &v_idx_to_hap_idx,
 		bool allele,
@@ -106,6 +106,193 @@ double diff(timespec start, timespec end)
 		temp.tv_nsec = end.tv_nsec-start.tv_nsec;
 	}
 	return temp.tv_sec + (temp.tv_nsec / 1000000000.0);
+}
+
+void fwdbck(const vector<vector<bool> > &haps, const vector<double> &map, int indv_idx, const parameters &params, vector<int> &out_path, vector<double> &out_prob)
+{
+	int N_hap = haps.size()-1;	// The minus 1 accounts for the current haplotype.
+	int N_pos = haps[0].size();
+
+	vector<vector<double> > f(N_pos, vector<double>(N_hap, -numeric_limits<double>::max()));	// Lots of memory used here
+	vector<vector<double> > b(N_pos, vector<double>(N_hap, -numeric_limits<double>::max()));	// Lots of memory used here
+
+	double em_match = log(1.0 - params.p_error);
+	double em_mismatch = max(log(params.p_error), -9999.9);
+
+	vector<int> f_idx_to_hap_idx(N_hap);
+	int idx_i=0;
+	for (int i=0; i<haps.size(); i++)
+	{
+		if (i == indv_idx)
+			continue;
+		f_idx_to_hap_idx[idx_i] = i;
+
+		if (haps[indv_idx][0] == haps[i][0])
+			f[0][idx_i] = em_match - log(N_hap);
+		else
+			f[0][idx_i] = em_mismatch - log(N_hap);
+
+		idx_i++;
+	}
+
+	for (int i=1; i < N_pos; i++)
+	{
+		bool allele = haps[indv_idx][i];
+		double rho = 4.0*params.Ne*((map[i] - map[i-1])/100.0);
+
+		double tmp = exp(-rho / N_hap);
+		double p_rec = (1.0-tmp) / N_hap;
+		double p_no_rec = tmp + p_rec;
+
+		p_rec = log(p_rec);
+		p_no_rec = log(p_no_rec);
+
+		for (int j=0; j < N_hap; j++)	// Could parallelize this loop?
+		{
+			vector<double> tmp(N_hap, -numeric_limits<double>::max());
+			double m=-numeric_limits<double>::max();
+			for (int k=0; k<N_hap; k++)
+			{
+				if (j == k)
+					tmp[k] = p_no_rec + f[i-1][k];
+				else
+					tmp[k] = p_rec + f[i-1][k];
+				m = max(m, tmp[k]);
+			}
+
+			double s = 0;
+			for (int k=0; k<N_hap; k++)
+				s += exp(tmp[k] - m);
+			s = log(s);
+			s += m;
+
+			if (haps[ f_idx_to_hap_idx[j] ][i] == allele)
+				f[i][j] = s + em_match;
+			else
+				f[i][j] = s + em_mismatch;
+		}
+
+		if ((i % 100) == 0)
+		{
+			LOG.printLOG(output_log::dbl2str(double(i)/N_pos*100, 3) + "%\n");
+		}
+	}
+
+	{
+		double m=-numeric_limits<double>::max();
+		for (int k=0; k<N_hap; k++)
+			m = max(m, f[N_pos-1][k]);
+		double post = 0;
+		for (int k=0; k<N_hap; k++)
+			post += exp(f[N_pos-1][k] - m);
+		post = log(post);
+		post += m;
+		LOG.printLOG("Fwd posterior: " + LOG.dbl2str(post, 3) + "\n");
+	}
+
+	for (int i=0; i<b[0].size(); i++)
+	{
+		b[N_pos-1][i] = -log(N_hap);
+	}
+
+	for (int i=N_pos-2; i > -1; i--)
+	{
+		bool allele = haps[indv_idx][i+1];
+		double rho = 4.0*params.Ne*((map[i+1] - map[i])/100.0);
+
+		double tmp = exp(-rho / N_hap);
+		double p_rec = (1.0-tmp) / N_hap;
+		double p_no_rec = tmp + p_rec;
+
+		p_rec = log(p_rec);
+		p_no_rec = log(p_no_rec);
+
+		for (int j=0; j < N_hap; j++)	// Could parallelize this loop?
+		{
+			vector<double> tmp(N_hap, -numeric_limits<double>::max());
+			double m=-numeric_limits<double>::max();
+			for (int k=0; k<N_hap; k++)
+			{
+				tmp[k] = em_mismatch;
+				if (haps[ f_idx_to_hap_idx[k] ][i+1] == allele)
+					tmp[k] = em_match;
+
+				if (j == k)
+					tmp[k] += p_no_rec + b[i+1][k];
+				else
+					tmp[k] += p_rec + b[i+1][k];
+
+				m = max(m, tmp[k]);
+			}
+
+			double s = 0;
+			for (int k=0; k<N_hap; k++)
+				s += exp(tmp[k] - m);
+			s = log(s);
+			s += m;
+
+			b[i][j] = s;
+		}
+
+		if ((i % 100) == 0)
+		{
+			LOG.printLOG(output_log::dbl2str(double(i)/N_pos*100, 3) + "%\n");
+		}
+	}
+
+	{
+		bool allele = haps[indv_idx][0];
+		double m=-numeric_limits<double>::max();
+		for (int k=0; k<N_hap; k++)
+		{
+			if (haps[ f_idx_to_hap_idx[k] ][0] == allele)
+				m = max(m, b[0][k] + em_match);
+			else
+				m = max(m, b[0][k] + em_mismatch);
+		}
+		double post = 0;
+		for (int k=0; k<N_hap; k++)
+		{
+			if (haps[ f_idx_to_hap_idx[k] ][0] == allele)
+				post += exp((b[0][k] + em_match) - m);
+			else
+				post += exp((b[0][k] + em_mismatch) - m);
+		}
+		post = log(post);
+		post += m;
+		LOG.printLOG("Bwd posterior: " + LOG.dbl2str(post, 3) + "\n");
+	}
+
+	out_path.resize(N_pos, 0);
+	out_prob.resize(N_pos,0);
+	for (int i=0; i<N_pos; i++)
+	{
+		vector<double> post(N_hap, -numeric_limits<double>::max());
+		double m = -numeric_limits<double>::max();
+		int m_idx = 0;
+		for (int j=0; j<N_hap; j++)
+		{
+			post[j] = f[i][j] + b[i][j];
+			if (post[j] > m)
+			{
+				m = post[j];
+				m_idx = j;
+			}
+		}
+		double sum = 0;
+		for (int j=0; j<N_hap; j++)
+		{
+			post[j] = exp(post[j] - m);
+			sum += post[j];
+		}
+		for (int j=0; j<N_hap; j++)
+			post[j] /= sum;
+
+		out_path[i] = f_idx_to_hap_idx[m_idx];
+		out_prob[i] = post[m_idx];
+	}
+
+
 }
 
 void viterbi(const vector<vector<bool> > &haps, const vector<double> &map, int indv_idx, const parameters &params, vector<int> &out_path)
@@ -199,7 +386,7 @@ void viterbi(const vector<vector<bool> > &haps, const vector<double> &map, int i
 			if (t == (numthreads-1))
 				end += extra;	// Last thread does extra work
 
-			workers.push_back(std::thread(inner_loop, ref(v), p_rec, p_no_rec, ref(haps),
+			workers.push_back(std::thread(inner_loop_viterbi, ref(v), p_rec, p_no_rec, ref(haps),
 					em_match, em_mismatch, i, start, end,
 					ref(v_idx_to_hap_idx), allele, ref(ptr), ref(vb)));
 			start = end;
@@ -417,90 +604,117 @@ int main(int argc, char *argv[])
 		read_genetic_map_at_positions(params.map_filename, positions, map);
 	}
 
-	cout << "#HAP\tCOPY\tCHR\tSTART\tEND\tN_SNPS\tMIN_ALLELE_COUNT\tMIN_ALLELE_POS\tEXACT_HAP_COUNT\tHAP_COUNT_1_PRCT_MISMATCH" << endl;
-	for (int i=0; i<input_haplotypes.size(); i++)
+	if (params.run_viterbi == true)
 	{
-		string indv = haplotype_names[i].substr(0, haplotype_names[i].size()-2);
-		if ((params.viterbi_indv.size() > 0) && (params.viterbi_indv.find(indv) == params.viterbi_indv.end()))
+		cout << "#HAP\tCOPY\tCHR\tSTART\tEND\tN_SNPS\tMIN_ALLELE_COUNT\tMIN_ALLELE_POS\tEXACT_HAP_COUNT\tHAP_COUNT_1_PRCT_MISMATCH" << endl;
+		for (int i=0; i<input_haplotypes.size(); i++)
 		{
-			continue;
-		}
-
-		LOG.printLOG("Running Viterbi on " + haplotype_names[i] + "\n");
-		vector<int> viterbi_path;
-		viterbi(input_haplotypes, map, i, params, viterbi_path);
-
-		// Process the viterbi path
-		int N_exact_match;
-		int N_one_prct_mismatch;
-		int min_pos = positions[0];
-		int max_pos = positions[0];
-		int start_idx = 0;
-		int current_haplotype = viterbi_path[0];
-		int N_SNPs = 1;
-		int min_freq = numeric_limits<int>::max();
-		int min_freq_idx = 0;
-		if (input_haplotypes[i][0] == 1)
-			min_freq = alt_allele_counts[0];
-		else
-			min_freq = (int)input_haplotypes.size() - alt_allele_counts[0];
-
-		for (int j=1; j<viterbi_path.size(); j++)
-		{
-			if (viterbi_path[j] != current_haplotype)
-			{	// Output haplotype
-
-				// Get haplotype frequency
-				get_haplotype_count(input_haplotypes, i, start_idx, j-1, N_exact_match, N_one_prct_mismatch);
-
-				cout << haplotype_names[i] << "\t" << haplotype_names[current_haplotype];
-				cout << "\t" << CHROM;
-				cout << "\t" << min_pos << "\t" << max_pos << "\t" << N_SNPs;
-				cout << "\t" << min_freq << "\t" << positions[min_freq_idx];
-				cout << "\t" << N_exact_match << "\t" << N_one_prct_mismatch << endl;
-				// Reset
-				min_pos = positions[j];	// Haplotype is left shifted
-				max_pos = positions[j];
-				start_idx = j;
-				current_haplotype = viterbi_path[j];
-				N_SNPs = 1;
-				min_freq = numeric_limits<int>::max();
-				min_freq_idx = j;
-				if (input_haplotypes[i][j] == 1)
-					min_freq = alt_allele_counts[j];
-				else
-					min_freq = (int)input_haplotypes.size() - alt_allele_counts[j];
-			}
-			else
+			string indv = haplotype_names[i].substr(0, haplotype_names[i].size()-2);
+			if ((params.viterbi_indv.size() > 0) && (params.viterbi_indv.find(indv) == params.viterbi_indv.end()))
 			{
-				max_pos = positions[j];
-				N_SNPs++;
-				if (input_haplotypes[i][j] == 1)
-				{
-					if (alt_allele_counts[j] < min_freq)
-					{
+				continue;
+			}
+
+			LOG.printLOG("Running Viterbi on " + haplotype_names[i] + "\n");
+			vector<int> viterbi_path;
+			viterbi(input_haplotypes, map, i, params, viterbi_path);
+
+			// Process the viterbi path
+			int N_exact_match;
+			int N_one_prct_mismatch;
+			int min_pos = positions[0];
+			int max_pos = positions[0];
+			int start_idx = 0;
+			int current_haplotype = viterbi_path[0];
+			int N_SNPs = 1;
+			int min_freq = numeric_limits<int>::max();
+			int min_freq_idx = 0;
+			if (input_haplotypes[i][0] == 1)
+				min_freq = alt_allele_counts[0];
+			else
+				min_freq = (int)input_haplotypes.size() - alt_allele_counts[0];
+
+			for (int j=1; j<viterbi_path.size(); j++)
+			{
+				if (viterbi_path[j] != current_haplotype)
+				{	// Output haplotype
+
+					// Get haplotype frequency
+					get_haplotype_count(input_haplotypes, i, start_idx, j-1, N_exact_match, N_one_prct_mismatch);
+
+					cout << haplotype_names[i] << "\t" << haplotype_names[current_haplotype];
+					cout << "\t" << CHROM;
+					cout << "\t" << min_pos << "\t" << max_pos << "\t" << N_SNPs;
+					cout << "\t" << min_freq << "\t" << positions[min_freq_idx];
+					cout << "\t" << N_exact_match << "\t" << N_one_prct_mismatch << endl;
+					// Reset
+					min_pos = positions[j];	// Haplotype is left shifted
+					max_pos = positions[j];
+					start_idx = j;
+					current_haplotype = viterbi_path[j];
+					N_SNPs = 1;
+					min_freq = numeric_limits<int>::max();
+					min_freq_idx = j;
+					if (input_haplotypes[i][j] == 1)
 						min_freq = alt_allele_counts[j];
-						min_freq_idx = j;
-					}
+					else
+						min_freq = (int)input_haplotypes.size() - alt_allele_counts[j];
 				}
 				else
 				{
-					if (((int)input_haplotypes.size() - alt_allele_counts[j]) < min_freq)
+					max_pos = positions[j];
+					N_SNPs++;
+					if (input_haplotypes[i][j] == 1)
 					{
-						min_freq = (int)input_haplotypes.size() - alt_allele_counts[j];
-						min_freq_idx = j;
+						if (alt_allele_counts[j] < min_freq)
+						{
+							min_freq = alt_allele_counts[j];
+							min_freq_idx = j;
+						}
 					}
-				}
+					else
+					{
+						if (((int)input_haplotypes.size() - alt_allele_counts[j]) < min_freq)
+						{
+							min_freq = (int)input_haplotypes.size() - alt_allele_counts[j];
+							min_freq_idx = j;
+						}
+					}
 
+				}
+			}
+			// Output last haplotype
+			get_haplotype_count(input_haplotypes, i, start_idx, viterbi_path.size()-1, N_exact_match, N_one_prct_mismatch);
+			cout << haplotype_names[i] << "\t" << haplotype_names[viterbi_path[viterbi_path.size()-1]];
+			cout << "\t" << CHROM;
+			cout << "\t" << min_pos << "\t" << max_pos << "\t" << N_SNPs;
+			cout << "\t" << min_freq << "\t" << positions[min_freq_idx];
+			cout << "\t" << N_exact_match << "\t" << N_one_prct_mismatch << endl;
+		}
+	}
+	else
+	{
+		cout << "#HAP\tCOPY\tCHR\tPOS\tPROB" << endl;
+		for (int i=0; i<input_haplotypes.size(); i++)
+		{
+			string indv = haplotype_names[i].substr(0, haplotype_names[i].size()-2);
+			if ((params.viterbi_indv.size() > 0) && (params.viterbi_indv.find(indv) == params.viterbi_indv.end()))
+			{
+				continue;
+			}
+
+			LOG.printLOG("Running Forward-backward on " + haplotype_names[i] + "\n");
+			vector<int> post_path;
+			vector<double> post_prob;
+			fwdbck(input_haplotypes, map, i, params, post_path, post_prob);
+
+			for (int j=0; j<positions.size(); j++)
+			{
+				cout << haplotype_names[i] << "\t" << haplotype_names[post_path[j]];
+				cout << "\t" << CHROM << "\t" << positions[j] << "\t" << post_prob[j];
+				cout << endl;
 			}
 		}
-		// Output last haplotype
-		get_haplotype_count(input_haplotypes, i, start_idx, viterbi_path.size()-1, N_exact_match, N_one_prct_mismatch);
-		cout << haplotype_names[i] << "\t" << haplotype_names[viterbi_path[viterbi_path.size()-1]];
-		cout << "\t" << CHROM;
-		cout << "\t" << min_pos << "\t" << max_pos << "\t" << N_SNPs;
-		cout << "\t" << min_freq << "\t" << positions[min_freq_idx];
-		cout << "\t" << N_exact_match << "\t" << N_one_prct_mismatch << endl;
 	}
 
 	time(&end);
